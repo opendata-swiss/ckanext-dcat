@@ -2,7 +2,7 @@ import json
 
 import nose
 
-from pylons import config
+from ckantoolkit import config
 
 from dateutil.parser import parse as parse_date
 from rdflib import URIRef, BNode, Literal
@@ -10,15 +10,13 @@ from rdflib.namespace import RDF
 
 from geomet import wkt
 
-try:
-    from ckan.tests import helpers, factories
-except ImportError:
-    from ckan.new_tests import helpers, factories
+from ckantoolkit.tests import helpers, factories
 
 from ckanext.dcat import utils
 from ckanext.dcat.processors import RDFSerializer
 from ckanext.dcat.profiles import (DCAT, DCT, ADMS, XSD, VCARD, FOAF, SCHEMA,
                                    SKOS, LOCN, GSP, OWL, SPDX, GEOJSON_IMT)
+from ckanext.dcat.utils import DCAT_EXPOSE_SUBCATALOGS
 
 eq_ = nose.tools.eq_
 assert_true = nose.tools.assert_true
@@ -221,7 +219,7 @@ class TestEuroDCATAPProfileSerializeDataset(BaseSerializeTest):
         assert contact_details
         eq_(unicode(contact_details), extras['contact_uri'])
         assert self._triple(g, contact_details, VCARD.fn, extras['contact_name'])
-        assert self._triple(g, contact_details, VCARD.hasEmail, extras['contact_email'])
+        assert self._triple(g, contact_details, VCARD.hasEmail, URIRef('mailto:' + extras['contact_email']))
 
     def test_contact_details_maintainer(self):
         dataset = {
@@ -242,7 +240,7 @@ class TestEuroDCATAPProfileSerializeDataset(BaseSerializeTest):
         assert contact_details
         assert_true(isinstance(contact_details, BNode))
         assert self._triple(g, contact_details, VCARD.fn, dataset['maintainer'])
-        assert self._triple(g, contact_details, VCARD.hasEmail, dataset['maintainer_email'])
+        assert self._triple(g, contact_details, VCARD.hasEmail, URIRef('mailto:' + dataset['maintainer_email']))
 
     def test_contact_details_author(self):
         dataset = {
@@ -261,7 +259,27 @@ class TestEuroDCATAPProfileSerializeDataset(BaseSerializeTest):
         assert contact_details
         assert_true(isinstance(contact_details, BNode))
         assert self._triple(g, contact_details, VCARD.fn, dataset['author'])
-        assert self._triple(g, contact_details, VCARD.hasEmail, dataset['author_email'])
+        assert self._triple(g, contact_details, VCARD.hasEmail, URIRef('mailto:' + dataset['author_email']))
+
+    def test_contact_details_no_duplicate_mailto(self):
+        # tests that mailto: isn't added again if it is stored in the dataset
+        dataset = {
+            'id': '4b6fe9ca-dc77-4cec-92a4-55c6624a5bd6',
+            'name': 'test-dataset',
+            'author': 'Example Author',
+            'author_email': 'mailto:ped@example.com',
+        }
+
+        s = RDFSerializer()
+        g = s.g
+
+        dataset_ref = s.graph_from_dataset(dataset)
+
+        contact_details = self._triple(g, dataset_ref, DCAT.contactPoint, None)[2]
+        assert contact_details
+        assert_true(isinstance(contact_details, BNode))
+        assert self._triple(g, contact_details, VCARD.fn, dataset['author'])
+        assert self._triple(g, contact_details, VCARD.hasEmail, URIRef(dataset['author_email']))
 
     def test_publisher_extras(self):
         dataset = {
@@ -561,6 +579,7 @@ class TestEuroDCATAPProfileSerializeDataset(BaseSerializeTest):
         # Checksum
         checksum = self._triple(g, distribution, SPDX.checksum, None)[2]
         assert checksum
+        assert self._triple(g, checksum, RDF.type, SPDX.Checksum)
         assert self._triple(g, checksum, SPDX.checksumValue, resource['hash'], data_type='http://www.w3.org/2001/XMLSchema#hexBinary')
         assert self._triple(g, checksum, SPDX.algorithm, URIRef(resource['hash_algorithm']))
 
@@ -591,7 +610,7 @@ class TestEuroDCATAPProfileSerializeDataset(BaseSerializeTest):
 
         assert self._triple(g, distribution, DCAT.byteSize, resource['size'])
 
-    def test_distribution_access_url_only(self):
+    def test_distribution_url_only(self):
 
         resource = {
             'id': 'c041c635-054f-4431-b647-f9186926d021',
@@ -617,6 +636,34 @@ class TestEuroDCATAPProfileSerializeDataset(BaseSerializeTest):
         distribution = self._triple(g, dataset_ref, DCAT.distribution, None)[2]
 
         assert self._triple(g, distribution, DCAT.accessURL, URIRef(resource['url']))
+        assert self._triple(g, distribution, DCAT.downloadURL, None) is None
+    
+    def test_distribution_access_url_only(self):
+
+        resource = {
+            'id': 'c041c635-054f-4431-b647-f9186926d021',
+            'package_id': '4b6fe9ca-dc77-4cec-92a4-55c6624a5bd6',
+            'name': 'CSV file',
+            'access_url': 'http://example.com/data/file.csv',
+        }
+
+        dataset = {
+            'id': '4b6fe9ca-dc77-4cec-92a4-55c6624a5bd6',
+            'name': 'test-dataset',
+            'title': 'Test DCAT dataset',
+            'resources': [
+                resource
+            ]
+        }
+
+        s = RDFSerializer()
+        g = s.g
+
+        dataset_ref = s.graph_from_dataset(dataset)
+
+        distribution = self._triple(g, dataset_ref, DCAT.distribution, None)[2]
+
+        assert self._triple(g, distribution, DCAT.accessURL, URIRef(resource['access_url']))
         assert self._triple(g, distribution, DCAT.downloadURL, None) is None
 
     def test_distribution_download_url_only(self):
@@ -675,9 +722,98 @@ class TestEuroDCATAPProfileSerializeDataset(BaseSerializeTest):
 
         assert self._triple(g, distribution, DCAT.accessURL, URIRef( resource['url']))
         assert self._triple(g, distribution, DCAT.downloadURL, URIRef(resource['download_url']))
+    
+    def test_distribution_both_urls_different_with_access_url(self):
+
+        resource = {
+            'id': 'c041c635-054f-4431-b647-f9186926d021',
+            'package_id': '4b6fe9ca-dc77-4cec-92a4-55c6624a5bd6',
+            'name': 'CSV file',
+            'access_url': 'http://example.com/data/file',
+            'download_url': 'http://example.com/data/file.csv',
+        }
+
+        dataset = {
+            'id': '4b6fe9ca-dc77-4cec-92a4-55c6624a5bd6',
+            'name': 'test-dataset',
+            'title': 'Test DCAT dataset',
+            'resources': [
+                resource
+            ]
+        }
+
+        s = RDFSerializer()
+        g = s.g
+
+        dataset_ref = s.graph_from_dataset(dataset)
+
+        distribution = self._triple(g, dataset_ref, DCAT.distribution, None)[2]
+
+        assert self._triple(g, distribution, DCAT.accessURL, URIRef( resource['access_url']))
+        assert self._triple(g, distribution, DCAT.downloadURL, URIRef(resource['download_url']))
+    
+    def test_distribution_prefer_access_url(self):
+
+        resource = {
+            'id': 'c041c635-054f-4431-b647-f9186926d021',
+            'package_id': '4b6fe9ca-dc77-4cec-92a4-55c6624a5bd6',
+            'name': 'CSV file',
+            'url': 'http://example.com/data',
+            'access_url': 'http://example.com/data/file',
+        }
+
+        dataset = {
+            'id': '4b6fe9ca-dc77-4cec-92a4-55c6624a5bd6',
+            'name': 'test-dataset',
+            'title': 'Test DCAT dataset',
+            'resources': [
+                resource
+            ]
+        }
+
+        s = RDFSerializer()
+        g = s.g
+
+        dataset_ref = s.graph_from_dataset(dataset)
+
+        distribution = self._triple(g, dataset_ref, DCAT.distribution, None)[2]
+
+        assert self._triple(g, distribution, DCAT.accessURL, URIRef( resource['access_url']))
+        assert self._triple(g, distribution, DCAT.downloadURL, None) is None
+
+    def test_distribution_prefer_access_url_with_download(self):
+
+        resource = {
+            'id': 'c041c635-054f-4431-b647-f9186926d021',
+            'package_id': '4b6fe9ca-dc77-4cec-92a4-55c6624a5bd6',
+            'name': 'CSV file',
+            'url': 'http://example.com/data',
+            'access_url': 'http://example.com/data/file',
+            'download_url': 'http://example.com/data/file.csv',
+        }
+
+        dataset = {
+            'id': '4b6fe9ca-dc77-4cec-92a4-55c6624a5bd6',
+            'name': 'test-dataset',
+            'title': 'Test DCAT dataset',
+            'resources': [
+                resource
+            ]
+        }
+
+        s = RDFSerializer()
+        g = s.g
+
+        dataset_ref = s.graph_from_dataset(dataset)
+
+        distribution = self._triple(g, dataset_ref, DCAT.distribution, None)[2]
+
+        assert self._triple(g, distribution, DCAT.accessURL, URIRef( resource['access_url']))
+        assert self._triple(g, distribution, DCAT.downloadURL, URIRef(resource['download_url']))
 
     def test_distribution_both_urls_the_same(self):
 
+        # old behavior - only serialize url to accessURL if it is different from downloadURL
         resource = {
             'id': 'c041c635-054f-4431-b647-f9186926d021',
             'package_id': '4b6fe9ca-dc77-4cec-92a4-55c6624a5bd6',
@@ -704,6 +840,36 @@ class TestEuroDCATAPProfileSerializeDataset(BaseSerializeTest):
 
         assert self._triple(g, distribution, DCAT.downloadURL, URIRef(resource['url']))
         assert self._triple(g, distribution, DCAT.accessURL, None) is None
+    
+    def test_distribution_both_urls_the_same_with_access_url(self):
+
+        # when the access_url is present, it should be serialized regardless if it is the same as downloadURL.
+        resource = {
+            'id': 'c041c635-054f-4431-b647-f9186926d021',
+            'package_id': '4b6fe9ca-dc77-4cec-92a4-55c6624a5bd6',
+            'name': 'CSV file',
+            'access_url': 'http://example.com/data/file.csv',
+            'download_url': 'http://example.com/data/file.csv',
+        }
+
+        dataset = {
+            'id': '4b6fe9ca-dc77-4cec-92a4-55c6624a5bd6',
+            'name': 'test-dataset',
+            'title': 'Test DCAT dataset',
+            'resources': [
+                resource
+            ]
+        }
+
+        s = RDFSerializer()
+        g = s.g
+
+        dataset_ref = s.graph_from_dataset(dataset)
+
+        distribution = self._triple(g, dataset_ref, DCAT.distribution, None)[2]
+
+        assert self._triple(g, distribution, DCAT.downloadURL, URIRef(resource['download_url']))
+        assert self._triple(g, distribution, DCAT.accessURL, URIRef(resource['access_url']))
 
     def test_distribution_format(self):
 
@@ -791,6 +957,7 @@ class TestEuroDCATAPProfileSerializeDataset(BaseSerializeTest):
 
         checksum = self._triple(g, distribution, SPDX.checksum, None)[2]
         assert checksum
+        assert self._triple(g, checksum, RDF.type, SPDX.Checksum)
         assert self._triple(g, checksum, SPDX.checksumValue, resource['hash'], data_type='http://www.w3.org/2001/XMLSchema#hexBinary')
         assert self._triple(g, checksum, SPDX.algorithm, resource['hash_algorithm'])
 
@@ -851,3 +1018,57 @@ class TestEuroDCATAPProfileSerializeCatalog(BaseSerializeTest):
         eq_(unicode(catalog), utils.catalog_uri())
 
         assert self._triple(g, catalog, DCT.modified, dataset['metadata_modified'], XSD.dateTime)
+
+    @helpers.change_config(DCAT_EXPOSE_SUBCATALOGS, 'true')
+    def test_subcatalog(self):
+        publisher = {'name': 'Publisher',
+                     'email': 'email@test.com',
+                     'type': 'Publisher',
+                     'uri': 'http://pub.lish.er'}
+        dataset = {
+            'id': '4b6fe9ca-dc77-4cec-92a4-55c6624a5bd6',
+            'name': 'test-dataset',
+            'title': 'test dataset',
+            'extras': [
+                {'key': 'source_catalog_title', 'value': 'Subcatalog example'},
+                {'key': 'source_catalog_homepage', 'value': 'http://subcatalog.example'},
+                {'key': 'source_catalog_description', 'value': 'Subcatalog example description'},
+                {'key': 'source_catalog_language', 'value': 'http://publications.europa.eu/resource/authority/language/ITA'},
+                {'key': 'source_catalog_modified', 'value': '2000-01-01'},
+                {'key': 'source_catalog_publisher', 'value': json.dumps(publisher)}
+            ]
+        }        
+        catalog_dict = {
+            'title': 'My Catalog',
+            'description': 'An Open Data Catalog',
+            'homepage': 'http://example.com',
+            'language': 'de',
+        }
+
+        s = RDFSerializer()
+        g = s.g
+
+        s.serialize_catalog(catalog_dict, dataset_dicts=[dataset])
+
+        # check if we have catalog->hasPart->subcatalog
+        catalogs = list(g.triples((None, RDF.type, DCAT.Catalog,)))
+        root = list(g.subjects(DCT.hasPart, None))
+        assert_true(len(catalogs)>0, catalogs)
+        assert_true(len(root) == 1, root)
+
+        root_ref = root[0]
+        
+        # check subcatalog
+        subcatalogs = list(g.objects(root_ref, DCT.hasPart))
+        assert_true(len(subcatalogs) == 1)
+        stitle = list(g.objects(subcatalogs[0], DCT.title))
+        assert_true(len(stitle) == 1)
+        assert_true(str(stitle[0]) == 'Subcatalog example')
+
+        # check dataset
+        dataset_ref = list(g.subjects(RDF.type, DCAT.Dataset))
+        assert_true(len(dataset_ref) == 1)
+        dataset_ref = dataset_ref[0]
+        dataset_title = list(g.objects(dataset_ref, DCT.title))
+        assert_true(len(dataset_title) == 1)
+        assert_true(unicode(dataset_title[0]) == dataset['title'])

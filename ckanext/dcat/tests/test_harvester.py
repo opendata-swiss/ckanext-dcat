@@ -6,16 +6,15 @@ import nose
 import httpretty
 from mock import patch
 
+from six.moves import xrange
+
 import ckan.plugins as p
-try:
-    import ckan.new_tests.helpers as h
-except ImportError:
-    import ckan.tests.helpers as h
+import ckantoolkit.tests.helpers as h
 
 import ckanext.harvest.model as harvest_model
 from ckanext.harvest import queue
 
-from ckanext.dcat.harvesters import DCATRDFHarvester
+from ckanext.dcat.harvesters import DCATRDFHarvester, DCATJSONHarvester
 from ckanext.dcat.interfaces import IDCATRDFHarvester
 import ckanext.dcat.harvesters.rdf
 
@@ -29,20 +28,33 @@ eq_ = nose.tools.eq_
 
 # Start monkey-patch
 
-original_get_content_and_type = DCATRDFHarvester._get_content_and_type
+original_rdf_get_content_and_type = DCATRDFHarvester._get_content_and_type
 
-
-def _patched_get_content_and_type(self, url, harvest_job, page=1, content_type=None):
+def _patched_rdf_get_content_and_type(self, url, harvest_job, page=1, content_type=None):
 
     httpretty.enable()
 
-    value1, value2 = original_get_content_and_type(self, url, harvest_job, page, content_type)
+    value1, value2 = original_rdf_get_content_and_type(self, url, harvest_job, page, content_type)
 
     httpretty.disable()
 
     return value1, value2
 
-DCATRDFHarvester._get_content_and_type = _patched_get_content_and_type
+DCATRDFHarvester._get_content_and_type = _patched_rdf_get_content_and_type
+
+original_json_get_content_and_type = DCATJSONHarvester._get_content_and_type
+
+def _patched_json_get_content_and_type(self, url, harvest_job, page=1, content_type=None):
+
+    httpretty.enable()
+
+    value1, value2 = original_json_get_content_and_type(self, url, harvest_job, page, content_type)
+
+    httpretty.disable()
+
+    return value1, value2
+
+DCATJSONHarvester._get_content_and_type = _patched_json_get_content_and_type
 
 # End monkey-patch
 
@@ -63,6 +75,11 @@ class TestRDFHarvester(p.SingletonPlugin):
             return None, ['Error 1', 'Error 2']
         else:
             return url, []
+
+    def update_session(self, session):
+        self.calls['update_session'] += 1
+        session.headers.update({'x-test': 'true'})
+        return session
 
     def after_download(self, content, harvest_job):
 
@@ -496,8 +513,6 @@ class FunctionalHarvestTest(object):
         harvest_source = h.call_action('harvest_source_create',
                                        {}, **source_dict)
 
-        eq_(harvest_source['source_type'], 'dcat_rdf')
-
         return harvest_source
 
     def _create_harvest_job(self, harvest_source_id):
@@ -789,7 +804,7 @@ class TestDCATHarvestFunctional(FunctionalHarvestTest):
         results = h.call_action('package_search', {}, fq=fq)
         eq_(results['count'], 1)
 
-	existing_dataset = results['results'][0]
+        existing_dataset = results['results'][0]
         existing_resource = existing_dataset.get('resources')[0]
 
         # Mock an update in the remote file
@@ -805,8 +820,8 @@ class TestDCATHarvestFunctional(FunctionalHarvestTest):
         new_results = h.call_action('package_search', {}, fq=fq)
         eq_(new_results['count'], 1)
 
-	new_dataset = new_results['results'][0]
-	new_resource = new_dataset.get('resources')[0]
+        new_dataset = new_results['results'][0]
+        new_resource = new_dataset.get('resources')[0]
 
         eq_(existing_resource['name'], 'Example resource 1')
         eq_(len(new_dataset.get('resources')), 1)
@@ -1051,6 +1066,35 @@ class TestDCATHarvestFunctionalExtensionPoints(FunctionalHarvestTest):
 
         eq_('Error 1', last_job_status['gather_error_summary'][0][0])
         eq_('Error 2', last_job_status['gather_error_summary'][1][0])
+
+    def test_harvest_update_session_extension_point_gets_called(self):
+
+        plugin = p.get_plugin('test_rdf_harvester')
+
+        harvest_source = self._create_harvest_source(self.rdf_mock_url)
+        self._create_harvest_job(harvest_source['id'])
+        self._run_jobs(harvest_source['id'])
+        self._gather_queue(1)
+
+        eq_(plugin.calls['update_session'], 1)
+
+    def test_harvest_update_session_add_header(self):
+
+        plugin = p.get_plugin('test_rdf_harvester')
+
+        harvest_source = self._create_harvest_source(self.rdf_mock_url)
+        self._create_harvest_job(harvest_source['id'])
+        self._run_jobs(harvest_source['id'])
+        self._gather_queue(1)
+
+        eq_(plugin.calls['update_session'], 1)
+
+        # Run the jobs to mark the previous one as Finished
+        self._run_jobs()
+
+        # Check that the header was actually set
+        assert ('true'
+                in httpretty.last_request().headers['x-test'])
 
     def test_harvest_after_download_extension_point_gets_called(self):
 
