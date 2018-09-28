@@ -3,17 +3,15 @@ import json
 
 import nose
 
+from ckantoolkit import config
+
 from rdflib import Graph, URIRef, BNode, Literal
 from rdflib.namespace import RDF
 
 from ckan.plugins import toolkit
 
-try:
-    from ckan.tests import helpers
-except ImportError:
-    from ckan.new_tests import helpers
+from ckantoolkit.tests import helpers, factories
 
-from ckan import plugins
 from ckanext.dcat.processors import RDFParser, RDFSerializer
 from ckanext.dcat.profiles import (DCAT, DCT, ADMS, LOCN, SKOS, GSP, RDFS,
                                    GEOJSON_IMT)
@@ -93,7 +91,8 @@ class TestEuroDCATAPProfileParsing(BaseParseTest):
         eq_(_get_extra_value('publisher_url'), 'http://some.org')
         eq_(_get_extra_value('publisher_type'), 'http://purl.org/adms/publishertype/NonProfitOrganisation')
         eq_(_get_extra_value('contact_name'), 'Point of Contact')
-        eq_(_get_extra_value('contact_email'), 'mailto:contact@some.org')
+        # mailto gets removed for storage and is added again on output
+        eq_(_get_extra_value('contact_email'), 'contact@some.org')
         eq_(_get_extra_value('access_rights'), 'public')
         eq_(_get_extra_value('provenance'), 'Some statement about provenance')
         eq_(_get_extra_value('dcat_type'), 'test-type')
@@ -235,6 +234,7 @@ class TestEuroDCATAPProfileParsing(BaseParseTest):
         resource = datasets[0]['resources'][0]
 
         eq_(resource['url'], u'http://access.url.org')
+        eq_(resource['access_url'], u'http://access.url.org')
         assert 'download_url' not in resource
 
     def test_distribution_download_url(self):
@@ -258,6 +258,7 @@ class TestEuroDCATAPProfileParsing(BaseParseTest):
 
         eq_(resource['url'], u'http://download.url.org')
         eq_(resource['download_url'], u'http://download.url.org')
+        assert 'access_url' not in resource
 
     def test_distribution_both_access_and_download_url(self):
         g = Graph()
@@ -279,8 +280,9 @@ class TestEuroDCATAPProfileParsing(BaseParseTest):
 
         resource = datasets[0]['resources'][0]
 
-        eq_(resource['url'], u'http://access.url.org')
+        eq_(resource['url'], u'http://download.url.org')
         eq_(resource['download_url'], u'http://download.url.org')
+        eq_(resource['access_url'], u'http://access.url.org')
 
     def test_distribution_format_imt_and_format(self):
         g = Graph()
@@ -554,7 +556,8 @@ class TestEuroDCATAPProfileParsing(BaseParseTest):
         eq_(dataset['title'], 'U.S. Widget Manufacturing Statistics')
 
         eq_(extras['contact_name'], 'Jane Doe')
-        eq_(extras['contact_email'], 'mailto:jane.doe@agency.gov')
+        # mailto gets removed for storage and is added again on output
+        eq_(extras['contact_email'], 'jane.doe@agency.gov')
         eq_(extras['publisher_name'], 'Widget Services')
         eq_(extras['publisher_email'], 'widget.services@agency.gov')
 

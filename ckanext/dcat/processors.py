@@ -1,3 +1,5 @@
+from __future__ import print_function
+
 import sys
 import argparse
 import xml
@@ -142,7 +144,7 @@ class RDFParser(RDFProcessor):
         '''
 
         _format = url_to_rdflib_format(_format)
-        if _format == 'pretty-xml':
+        if not _format or _format == 'pretty-xml':
             _format = 'xml'
 
         try:
@@ -284,6 +286,8 @@ class RDFSerializer(RDFProcessor):
 
         self.graph_from_dataset(dataset_dict)
 
+        if not _format:
+            _format = 'xml'
         _format = url_to_rdflib_format(_format)
 
         if _format == 'json-ld':
@@ -328,6 +332,8 @@ class RDFSerializer(RDFProcessor):
         if pagination_info:
             self._add_pagination_triples(pagination_info)
 
+        if not _format:
+            _format = 'xml'
         _format = url_to_rdflib_format(_format)
         output = self.g.serialize(format=_format)
 
@@ -345,7 +351,7 @@ class RDFSerializer(RDFProcessor):
         source_uri = _get_from_extra('source_catalog_homepage')
         if not source_uri:
             return
-        
+
         g = self.g
         catalog_ref = URIRef(source_uri)
 
@@ -392,9 +398,9 @@ class RDFSerializer(RDFProcessor):
                     elif val is None:
                         continue
                     g.add((agent, predicate, _type(val)))
-        
+
         return catalog_ref
-        
+
 
 if __name__ == '__main__':
 
@@ -433,13 +439,21 @@ Operation mode.
 
     config.update({DCAT_EXPOSE_SUBCATALOGS: args.subcatalogs})
 
+    # Workaround until the core translation function defaults to the Flask one
+    from paste.registry import Registry
+    from ckan.lib.cli import MockTranslator
+    registry = Registry()
+    registry.prepare()
+    from pylons import translator
+    registry.register(translator, MockTranslator())
+
     if args.mode == 'produce':
         serializer = RDFSerializer(profiles=args.profile,
                                    compatibility_mode=args.compat_mode)
 
         dataset = json.loads(contents)
         out = serializer.serialize_dataset(dataset, _format=args.format)
-        print out
+        print(out)
     else:
         parser = RDFParser(profiles=args.profile,
                            compatibility_mode=args.compat_mode)
@@ -449,4 +463,4 @@ Operation mode.
         ckan_datasets = [d for d in parser.datasets()]
 
         indent = 4 if args.pretty else None
-        print json.dumps(ckan_datasets, indent=indent)
+        print(json.dumps(ckan_datasets, indent=indent))
